@@ -133,7 +133,8 @@ def create_bom(schfile):
             if (not "lcsc" in item):
                 item['lcsc'] = ""
 
-            items[item['uid']] = item
+            # convert the uids to lowercase.
+            items[item['uid'].lower()] = item
 
     fh.close()
 
@@ -201,14 +202,21 @@ def create_pcba():
     botfh.write("Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n")
 
     for m in board.GetModules():
-        uid = m.GetPath().replace('/', '')
+        pathstr = m.GetPath().AsString()
+        # Gives something like: '/00000000-0000-0000-0000-00005e3c9710'
+        uid = pathstr.replace('/', '').replace('-', '')
+        # Remove leading zeroes
+        while uid.startswith('0'):
+            uid = uid[1:]
+        uid = uid.lower()
+        
         smd = ((m.GetAttributes() & pcbnew.MOD_CMS) == pcbnew.MOD_CMS)
         x = m.GetPosition().x/1000000.0
         y = m.GetPosition().y/1000000.0
         rot = m.GetOrientation()/10.0
         layer = m.GetLayerName()
         print("Got module = " + uid + " smd=" + str(smd) + " x=" + str(x) + " y=" + str(y) + " rot=" + str(rot) + "layer="+str(layer))
-        print(m.GetPath() + " attr=" + str(m.GetAttributes()))
+        print(pathstr + " attr=" + str(m.GetAttributes()))
 
         if (not uid in refdb):
             print("WARNING: item " + uid + " missing from schematic")
