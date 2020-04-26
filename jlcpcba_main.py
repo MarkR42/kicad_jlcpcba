@@ -11,6 +11,8 @@ import pcbnew
 import os
 import re
 
+from . import sch_reader
+
 #
 # Setup a few useful globals...
 #
@@ -66,106 +68,40 @@ def possible_rotate(footprint):
 
     return 0
 
-#
-# Function to read the schematic, create a grouped BOM file, and also keep
-# an internal table for use by the later code
-#
-def create_bom(schfile):
+def read_all_schematics(d):
+    """
+        Read all schematics in the directory d
+        
+        returns a list of SchematicPart
+    """
+    all_parts = []
+    for fn in os.listdir(d):
+        if fn.lower().endswith('.sch'):
+            parts = sch_reader.read_schematic(os.path.join(d, fn))
+            all_parts += parts
+    return all_parts
 
-    gotonext = False
-    items = {}
-    item = {}
+used_refs = set()
 
-    fh = open(schfile, "r")
-    for line in fh:
-        line = line.rstrip()
-        print(line)
-
-        # Start of an item...
-        if (re.match('^\$Comp$', line)):
-            item = {}
-            continue
-
-        # We care about unit 1...
-        m = re.match('^U (\d+) (\d+) ([^\s]+)', line)
-        if (m):
-            if (m.group(1) != '1'):
-                gotonext = True
-                continue
-
-            item['uid'] = m.group(3)
-            gotonext = False
-            continue
-
-        # We only get past here if we are processing a unit 1 item
-        if (gotonext):
-            continue
-
-        # Pull out the reference...
-        m = re.match('^F 0 "([^"]+)"', line)
-        if (m):
-            item['reference'] = m.group(1)
-            continue
-
-        # Pull out the value...
-        m = re.match('^F 1 "([^"]+)"', line)
-        if (m):
-            item['value'] = m.group(1)
-            continue
-
-        # Pull out the footprint...
-        m = re.match('^F 2 "([^"]+)"', line)
-        if (m):
-            item['footprint'] = m.group(1)
-            continue
-
-        # Pull out the LCSC part number...
-        m = re.match('^F \d+ "([^"]+)" .* "LCSC"$', line)
-        if (m):
-            item['lcsc'] = m.group(1)
-            continue
-
-        # Store it if it looks ok at the end
-        if (re.match('^\$EndComp$', line)):
-            if (not "footprint" in item):
-                continue
-
-            if (not "lcsc" in item):
-                item['lcsc'] = ""
-
-            # convert the uids to lowercase.
-            items[item['uid'].lower()] = item
-
-    fh.close()
-
-    #
-    # Now we can create the BOM by grouping...
-    #
-    bom = []
-    uniq = {}
-
-    for i in items.values():
-        key = i['value'] + "//" + i['footprint'] + "//" + i['lcsc']
-
-        if (not key in uniq):
-            uniq[key] = []
-
-        uniq[key].append(i['reference'])
-
-    #
-    # Now output the BOM in JLCPCB format...
-    #
-    bomfile=path + "/" + name + "_bom.csv"
-    fh = open(bomfile, "w")
-    fh.write("Comment,Designator,Footprint,LCSC\n")
-    for k in uniq.keys():
-        (value, footprint, lcsc) = re.split("//", k)
-        refs = ",".join(uniq[k])
-        fh.write('"'+value+'","'+refs+'","'+footprint+'","'+lcsc+'"\n')
-
-    fh.close()
-    return items
-
+def deduplicate_reference(ref):
+    global used_refs
+    
+    ref_letters = ''.join(filter(lambda c: not c.isdigit(), ref))
+    ref_digits = ''.join(filter(lambda c: c.isdigit(), ref))
+    
+    if not ref in used_refs:
+        used_refs.add(ref)
+        return ref
+    else:
+        # Try +100 etc, until we find an unused ref.
+        # Find number in ref
+        for n in range(10):
+            num = int(ref_digits) + 100
+            newref = ref_letters + str(num)
+            if not newref in used_refs:
+                used_refs.add(newref)
+                return newref
+        
 #
 # Actually create the PCBA files...
 #
@@ -173,33 +109,37 @@ def create_pcba():
     global path
     global name
     global rotdb
-
+    global used_refs
+    used_refs = set()
+    
     board = pcbnew.GetBoard()
     boardfile = board.GetFileName()
     path = os.path.dirname(boardfile)
+
+    # Grab all the schematics
+    all_schematic_parts = read_all_schematics(path)
+    if len(all_schematic_parts) == 0:
+        raise Exception("No JLCPCB parts found in any schematic in current dir")
+
     name = os.path.splitext(os.path.basename(boardfile))[0]
+    
+    # Open both layer files...
+    posfiles = [] # top and bottom files
+    for layer in 'top', 'bottom':
+        posfn = os.path.join(path, name + '_' + layer + '_pos.csv')
+        f = open(posfn, 'wt')
+        print("Designator,Val,Package,Mid X,Mid Y,Rotation,Layer", file=f)
+        posfiles.append(f)
+        del f
+    # Open bom file
+    bomfn = os.path.join(path, name + '_bom.csv')
+    bomfile = open(bomfn, 'wt')
+    print("Comment,Designator,Footprint,LCSC", file=bomfile)
 
     #
     # Populate the rotation db (do it here so editing and retrying is easy)
     #
     rotdb = read_rotdb(os.path.join(os.path.dirname(__file__), 'rotations.cf'))
-
-    #
-    # Create the BOM and build the refdb...
-    #
-    refdb = create_bom(path + "/" + name + ".sch")
-    #
-    # Now we can process all of the SMT elements...
-    #
-
-    # Open both layer files...
-    topfile=path + "/" + name + "_top_pos.csv"
-    topfh = open(topfile, "w")
-    topfh.write("Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n")
-
-    botfile=path + "/" + name + "_bottom_pos.csv"
-    botfh = open(botfile, "w")
-    botfh.write("Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n")
 
     for m in board.GetModules():
         pathstr = m.GetPath().AsString()
@@ -216,34 +156,62 @@ def create_pcba():
         rot = m.GetOrientation()/10.0
         layer = m.GetLayerName()
         print("Got module = " + uid + " smd=" + str(smd) + " x=" + str(x) + " y=" + str(y) + " rot=" + str(rot) + "layer="+str(layer))
-        print(pathstr + " attr=" + str(m.GetAttributes()))
-
-        if (not uid in refdb):
-            print("WARNING: item " + uid + " missing from schematic")
+        if not (smd and (uid != '')):
+            # Skip this module, it is not interesting.
+            print("  ... Ignoring")
             continue
 
-        item = refdb[uid]
-        reference = item['reference']
-        value = item['value']
-        footprint = item['footprint']
+        # Find the part in the schematic to check its LCSC part number
+        # we should match reference, uid and value
+        # (in case someone panelised 2 variants of the same pcb with different resistor or capacitor...)
+        reference = m.GetReference()
+        value =  m.GetValue()
+        print("Finding part, uid={} reference={} value={}".format(uid, reference, value)) 
+        # TODO
+        found_parts = []
+        for p in all_schematic_parts:
+            if (p.uid.lower(), p.reference, p.value) == (uid.lower(), reference, value):
+                # Found
+                found_parts.append(p)
+        if len(found_parts) == 0:
+            # If part is not found, we will skip it.
+            print(" ... not found")
+            continue
+        if len(found_parts) > 1:
+            raise Exception("Duplicate part found for {}".format(reference))
+        found_part = found_parts[0]
+        print("Found part in schematic, part {} footprint {}".format(found_part.lcsc, found_part.footprint))
+        
+        newref = deduplicate_reference(reference)
+        print(".. renamed reference to {}".format(newref))
+        
+        footprint = found_part.footprint
 
         # Now do the rotation needed...
         rot = (rot + possible_rotate(footprint)) % 360
 
         # Now write to the top and bottom file respectively
         fpshort = footprint.split(':')[1]
-        fh = topfh
+        fh = posfiles[0]
         lname = "top"
         y = y * -1                  # y is negative always???
         if (smd):
             if (layer == "B.Cu"):   
-                fh = botfh
+                fh = posfiles[1]
                 lname = "bottom"
 
-            fh.write('"' + reference + '","' + value + '","' + fpshort + '",' +
-                    str(x) + ',' + str(y) + ',' + str(rot) + ',' + lname + '\n')
+            print('"{}","{}","{}",{},{},{},{}'.format(
+                newref, value, fpshort, x, y, rot, lname),
+                file=fh)
+            del fh
+            
+            # comment, reference, footprint, lcsc
+            print('"{}","{}","{}","{}"'.format(
+                value, newref, fpshort, found_part.lcsc),
+                file=bomfile)
 
-    topfh.close()
-    botfh.close()
+    for f in posfiles:
+        f.close()
+    bomfile.close()
 
 #create()

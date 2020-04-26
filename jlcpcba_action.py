@@ -21,11 +21,13 @@ class JlcpcbaPluginAction(pcbnew.ActionPlugin):
             wx.MessageDialog(None, "All Done").ShowModal()
         except Exception as e:
             import os
-            plugin_dir = os.path.dirname(os.path.realpath(__file__))
-            log_file = os.path.join(plugin_dir, 'jlcpcba_run.log')
-            with open(log_file, 'w') as f:
-                f.write(repr(e))
+            log_dir = os.environ.get('XDG_RUNTIME_DIR', os.environ['HOME'] )
+            log_file = os.path.join(log_dir, 'jlcpcba_run.log')
+            with open(log_file, 'wt') as f:
+                print(str(e), file=f)
+                
             wx.MessageDialog(None, "Failed, check logs").ShowModal()
+            raise
 
 
 
