@@ -95,8 +95,8 @@ def deduplicate_reference(ref):
     else:
         # Try +100 etc, until we find an unused ref.
         # Find number in ref
-        for n in range(10):
-            num = int(ref_digits) + 100
+        for n in range(1,10):
+            num = int(ref_digits) + (100*n)
             newref = ref_letters + str(num)
             if not newref in used_refs:
                 used_refs.add(newref)
