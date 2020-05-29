@@ -76,7 +76,8 @@ def read_all_schematics(d):
     """
     all_parts = []
     for fn in os.listdir(d):
-        if fn.lower().endswith('.sch'):
+        fn_lower = fn.lower()
+        if fn_lower.endswith('.sch') or fn_lower.endswith('.kicad_sch'):
             parts = sch_reader.read_schematic(os.path.join(d, fn))
             all_parts += parts
     return all_parts
@@ -144,7 +145,8 @@ def create_pcba():
     for m in board.GetModules():
         pathstr = m.GetPath().AsString()
         # Gives something like: '/00000000-0000-0000-0000-00005e3c9710'
-        uid = pathstr.replace('/', '').replace('-', '')
+        uid0 = pathstr.replace('/', '')
+        uid = uid0.replace('-', '')
         # Remove leading zeroes
         while uid.startswith('0'):
             uid = uid[1:]
@@ -170,9 +172,10 @@ def create_pcba():
         # TODO
         found_parts = []
         for p in all_schematic_parts:
-            if (p.uid.lower(), p.reference, p.value) == (uid.lower(), reference, value):
-                # Found
-                found_parts.append(p)
+            if p.uid.lower() in (uid.lower(), uid0.lower()):
+                if (p.reference, p.value) == (reference, value):
+                    # Found
+                    found_parts.append(p)
         if len(found_parts) == 0:
             # If part is not found, we will skip it.
             print(" ... not found")
